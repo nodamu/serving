@@ -21,28 +21,31 @@ limitations under the License.
 #include <vector>
 
 #include "google/protobuf/map.h"
+#include "absl/types/optional.h"
+#include "tensorflow/cc/saved_model/signature_constants.h"
 #include "tensorflow/core/example/example.pb.h"
 #include "tensorflow/core/example/feature.pb.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/mutex.h"
+#include "tensorflow/core/platform/threadpool_options.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/public/session.h"
 #include "tensorflow_serving/apis/input.pb.h"
 #include "tensorflow_serving/apis/model.pb.h"
 #include "tensorflow_serving/apis/regression.pb.h"
 #include "tensorflow_serving/core/test_util/mock_session.h"
+#include "tensorflow_serving/servables/tensorflow/util.h"
 #include "tensorflow_serving/test_util/test_util.h"
-#include "tensorflow_serving/util/optional.h"
 
 namespace tensorflow {
 namespace serving {
 namespace {
 
-using ::testing::_;
 using test_util::EqualsProto;
 using test_util::MockSession;
+using ::testing::_;
 
 const char kInputTensor[] = "input:0";
 const char kOutputTensor[] = "output:0";
@@ -59,7 +62,7 @@ const char kImproperlySizedOutputSignature[] = "ImproperlySizedOutputSignature";
 // Copies the "output" float feature from each Example.
 class FakeSession : public tensorflow::Session {
  public:
-  explicit FakeSession(optional<int64> expected_timeout)
+  explicit FakeSession(absl::optional<int64> expected_timeout)
       : expected_timeout_(expected_timeout) {}
   ~FakeSession() override = default;
   Status Create(const GraphDef& graph) override {
@@ -94,6 +97,16 @@ class FakeSession : public tensorflow::Session {
              const std::vector<string>& output_names,
              const std::vector<string>& target_nodes,
              std::vector<Tensor>* outputs, RunMetadata* run_metadata) override {
+    return Run(run_options, inputs, output_names, target_nodes, outputs,
+               run_metadata, thread::ThreadPoolOptions());
+  }
+
+  Status Run(const RunOptions& run_options,
+             const std::vector<std::pair<string, Tensor>>& inputs,
+             const std::vector<string>& output_names,
+             const std::vector<string>& target_nodes,
+             std::vector<Tensor>* outputs, RunMetadata* run_metadata,
+             const thread::ThreadPoolOptions& thread_pool_options) override {
     if (expected_timeout_) {
       CHECK_EQ(*expected_timeout_, run_options.timeout_in_ms());
     }
@@ -169,46 +182,16 @@ class FakeSession : public tensorflow::Session {
   }
 
  private:
-  const optional<int64> expected_timeout_;
+  const absl::optional<int64> expected_timeout_;
 };
 
-// Add a named signature to the mutable meta_graph_def* parameter.
-// If is_classification is false, will add a regression signature, which is
-// invalid in classification requests.
-void AddNamedSignatureToSavedModelBundle(
-    const string& input_tensor_name, const string& output_scores_tensor_name,
-    const string& signature_name, const bool is_regression,
-    tensorflow::MetaGraphDef* meta_graph_def) {
-  auto* signature_defs = meta_graph_def->mutable_signature_def();
-  SignatureDef sig_def;
-  string methond_name;
-  if (is_regression) {
-    TensorInfo input_tensor_info;
-    input_tensor_info.set_name(input_tensor_name);
-    (*sig_def.mutable_inputs())["inputs"] = input_tensor_info;
-    TensorInfo scores_tensor_info;
-    scores_tensor_info.set_name(output_scores_tensor_name);
-    (*sig_def.mutable_outputs())["outputs"] = scores_tensor_info;
-    methond_name = "tensorflow/serving/regress";
-  } else {
-    TensorInfo input_tensor_info;
-    input_tensor_info.set_name(input_tensor_name);
-    (*sig_def.mutable_inputs())["inputs"] = input_tensor_info;
-    TensorInfo class_tensor_info;
-    class_tensor_info.set_name(kOutputPlusOneTensor);
-    (*sig_def.mutable_outputs())["classes"] = class_tensor_info;
-    methond_name = "tensorflow/serving/classify";
-  }
-  sig_def.set_method_name(methond_name);
-  (*signature_defs)[signature_name] = sig_def;
-}
-
-class RegressorTest : public ::testing::Test {
+class RegressorTest : public ::testing::TestWithParam<bool> {
  public:
   void SetUp() override {
+    SetSignatureMethodNameCheckFeature(IsMethodNameCheckEnabled());
     saved_model_bundle_.reset(new SavedModelBundle);
     meta_graph_def_ = &saved_model_bundle_->meta_graph_def;
-    optional<int64> expected_timeout = GetRunOptions().timeout_in_ms();
+    absl::optional<int64> expected_timeout = GetRunOptions().timeout_in_ms();
     fake_session_ = new FakeSession(expected_timeout);
     saved_model_bundle_->session.reset(fake_session_);
 
@@ -216,12 +199,12 @@ class RegressorTest : public ::testing::Test {
     SignatureDef sig_def;
     TensorInfo input_tensor_info;
     input_tensor_info.set_name(kInputTensor);
-    (*sig_def.mutable_inputs())["inputs"] = input_tensor_info;
+    (*sig_def.mutable_inputs())[kRegressInputs] = input_tensor_info;
     TensorInfo scores_tensor_info;
     scores_tensor_info.set_name(kOutputTensor);
-    (*sig_def.mutable_outputs())["outputs"] = scores_tensor_info;
-    sig_def.set_method_name("tensorflow/serving/regress");
-    (*signature_defs)["serving_default"] = sig_def;
+    (*sig_def.mutable_outputs())[kRegressOutputs] = scores_tensor_info;
+    if (IsMethodNameCheckEnabled()) sig_def.set_method_name(kRegressMethodName);
+    (*signature_defs)[kDefaultServingSignatureDefKey] = sig_def;
 
     AddNamedSignatureToSavedModelBundle(
         kInputTensor, kOutputPlusOneTensor, kOutputPlusOneSignature,
@@ -238,6 +221,8 @@ class RegressorTest : public ::testing::Test {
   }
 
  protected:
+  bool IsMethodNameCheckEnabled() { return GetParam(); }
+
   // Return an example with the feature "output" = [output].
   Example example_with_output(const float output) {
     Feature feature;
@@ -261,6 +246,37 @@ class RegressorTest : public ::testing::Test {
     return run_options;
   }
 
+  // Add a named signature to the mutable meta_graph_def* parameter.
+  // If is_regression is false, will add a classification signature, which is
+  // invalid in classification requests.
+  void AddNamedSignatureToSavedModelBundle(
+      const string& input_tensor_name, const string& output_scores_tensor_name,
+      const string& signature_name, const bool is_regression,
+      tensorflow::MetaGraphDef* meta_graph_def) {
+    auto* signature_defs = meta_graph_def->mutable_signature_def();
+    SignatureDef sig_def;
+    string method_name;
+    if (is_regression) {
+      TensorInfo input_tensor_info;
+      input_tensor_info.set_name(input_tensor_name);
+      (*sig_def.mutable_inputs())[kRegressInputs] = input_tensor_info;
+      TensorInfo scores_tensor_info;
+      scores_tensor_info.set_name(output_scores_tensor_name);
+      (*sig_def.mutable_outputs())[kRegressOutputs] = scores_tensor_info;
+      method_name = kRegressMethodName;
+    } else {
+      TensorInfo input_tensor_info;
+      input_tensor_info.set_name(input_tensor_name);
+      (*sig_def.mutable_inputs())[kClassifyInputs] = input_tensor_info;
+      TensorInfo class_tensor_info;
+      class_tensor_info.set_name(kOutputPlusOneTensor);
+      (*sig_def.mutable_outputs())[kClassifyOutputClasses] = class_tensor_info;
+      method_name = kClassifyMethodName;
+    }
+    if (IsMethodNameCheckEnabled()) sig_def.set_method_name(method_name);
+    (*signature_defs)[signature_name] = sig_def;
+  }
+
   // Variables used to create the regression model
   tensorflow::MetaGraphDef* meta_graph_def_;
   FakeSession* fake_session_;
@@ -274,7 +290,7 @@ class RegressorTest : public ::testing::Test {
   RegressionResult result_;
 };
 
-TEST_F(RegressorTest, BasicExampleList) {
+TEST_P(RegressorTest, BasicExampleList) {
   TF_ASSERT_OK(Create());
   auto* examples =
       request_.mutable_input()->mutable_example_list()->mutable_examples();
@@ -298,7 +314,7 @@ TEST_F(RegressorTest, BasicExampleList) {
                                              " } "));
 }
 
-TEST_F(RegressorTest, BasicExampleListWithContext) {
+TEST_P(RegressorTest, BasicExampleListWithContext) {
   TF_ASSERT_OK(Create());
   auto* list_with_context =
       request_.mutable_input()->mutable_example_list_with_context();
@@ -325,7 +341,7 @@ TEST_F(RegressorTest, BasicExampleListWithContext) {
                                              " } "));
 }
 
-TEST_F(RegressorTest, ValidNamedSignature) {
+TEST_P(RegressorTest, ValidNamedSignature) {
   TF_ASSERT_OK(Create());
   request_.mutable_model_spec()->set_signature_name(kOutputPlusOneSignature);
   auto* examples =
@@ -351,7 +367,7 @@ TEST_F(RegressorTest, ValidNamedSignature) {
                                              " } "));
 }
 
-TEST_F(RegressorTest, InvalidNamedSignature) {
+TEST_P(RegressorTest, InvalidNamedSignature) {
   TF_ASSERT_OK(Create());
   request_.mutable_model_spec()->set_signature_name(kInvalidNamedSignature);
   auto* examples =
@@ -369,7 +385,7 @@ TEST_F(RegressorTest, InvalidNamedSignature) {
   EXPECT_EQ(::tensorflow::error::INVALID_ARGUMENT, status.code()) << status;
 }
 
-TEST_F(RegressorTest, MalformedOutputs) {
+TEST_P(RegressorTest, MalformedOutputs) {
   TF_ASSERT_OK(Create());
   request_.mutable_model_spec()->set_signature_name(
       kImproperlySizedOutputSignature);
@@ -389,7 +405,7 @@ TEST_F(RegressorTest, MalformedOutputs) {
   EXPECT_EQ(::tensorflow::error::INVALID_ARGUMENT, status.code()) << status;
 }
 
-TEST_F(RegressorTest, EmptyInput) {
+TEST_P(RegressorTest, EmptyInput) {
   TF_ASSERT_OK(Create());
   // Touch input.
   request_.mutable_input();
@@ -405,7 +421,7 @@ TEST_F(RegressorTest, EmptyInput) {
               ::testing::HasSubstr("Invalid argument: Input is empty"));
 }
 
-TEST_F(RegressorTest, EmptyExampleList) {
+TEST_P(RegressorTest, EmptyExampleList) {
   TF_ASSERT_OK(Create());
   request_.mutable_input()->mutable_example_list();
   Status status = regressor_->Regress(request_, &result_);
@@ -420,7 +436,7 @@ TEST_F(RegressorTest, EmptyExampleList) {
               ::testing::HasSubstr("Invalid argument: Input is empty"));
 }
 
-TEST_F(RegressorTest, EmptyExampleListWithContext) {
+TEST_P(RegressorTest, EmptyExampleListWithContext) {
   TF_ASSERT_OK(Create());
   // Add a ExampleListWithContext which has context but no examples.
   *request_.mutable_input()
@@ -438,10 +454,10 @@ TEST_F(RegressorTest, EmptyExampleListWithContext) {
               ::testing::HasSubstr("Invalid argument: Input is empty"));
 }
 
-TEST_F(RegressorTest, RunsFails) {
+TEST_P(RegressorTest, RunsFails) {
   MockSession* mock = new MockSession;
   saved_model_bundle_->session.reset(mock);
-  EXPECT_CALL(*mock, Run(_, _, _, _, _, _))
+  EXPECT_CALL(*mock, Run(_, _, _, _, _, _, _))
       .WillRepeatedly(
           ::testing::Return(errors::Internal("Run totally failed")));
   TF_ASSERT_OK(Create());
@@ -457,11 +473,11 @@ TEST_F(RegressorTest, RunsFails) {
   EXPECT_THAT(status.ToString(), ::testing::HasSubstr("Run totally failed"));
 }
 
-TEST_F(RegressorTest, UnexpectedOutputTensorSize) {
+TEST_P(RegressorTest, UnexpectedOutputTensorSize) {
   MockSession* mock = new MockSession;
   saved_model_bundle_->session.reset(mock);
   std::vector<Tensor> outputs = {Tensor(DT_FLOAT, TensorShape({2}))};
-  EXPECT_CALL(*mock, Run(_, _, _, _, _, _))
+  EXPECT_CALL(*mock, Run(_, _, _, _, _, _, _))
       .WillOnce(::testing::DoAll(::testing::SetArgPointee<4>(outputs),
                                  ::testing::Return(Status::OK())));
   TF_ASSERT_OK(Create());
@@ -470,7 +486,7 @@ TEST_F(RegressorTest, UnexpectedOutputTensorSize) {
   Status status = regressor_->Regress(request_, &result_);
   ASSERT_FALSE(status.ok());
   EXPECT_THAT(status.ToString(), ::testing::HasSubstr("output batch size"));
-  EXPECT_CALL(*mock, Run(_, _, _, _, _, _))
+  EXPECT_CALL(*mock, Run(_, _, _, _, _, _, _))
       .WillOnce(::testing::DoAll(::testing::SetArgPointee<4>(outputs),
                                  ::testing::Return(Status::OK())));
   RegressionResponse response;
@@ -480,12 +496,12 @@ TEST_F(RegressorTest, UnexpectedOutputTensorSize) {
   EXPECT_THAT(status.ToString(), ::testing::HasSubstr("output batch size"));
 }
 
-TEST_F(RegressorTest, UnexpectedOutputTensorType) {
+TEST_P(RegressorTest, UnexpectedOutputTensorType) {
   MockSession* mock = new MockSession;
   saved_model_bundle_->session.reset(mock);
   // We expect a FLOAT output type; test returning a STRING.
   std::vector<Tensor> outputs = {Tensor(DT_STRING, TensorShape({1}))};
-  EXPECT_CALL(*mock, Run(_, _, _, _, _, _))
+  EXPECT_CALL(*mock, Run(_, _, _, _, _, _, _))
       .WillOnce(::testing::DoAll(::testing::SetArgPointee<4>(outputs),
                                  ::testing::Return(Status::OK())));
   TF_ASSERT_OK(Create());
@@ -495,7 +511,7 @@ TEST_F(RegressorTest, UnexpectedOutputTensorType) {
   ASSERT_FALSE(status.ok());
   EXPECT_THAT(status.ToString(),
               ::testing::HasSubstr("Expected output Tensor of DT_FLOAT"));
-  EXPECT_CALL(*mock, Run(_, _, _, _, _, _))
+  EXPECT_CALL(*mock, Run(_, _, _, _, _, _, _))
       .WillOnce(::testing::DoAll(::testing::SetArgPointee<4>(outputs),
                                  ::testing::Return(Status::OK())));
   RegressionResponse response;
@@ -506,10 +522,10 @@ TEST_F(RegressorTest, UnexpectedOutputTensorType) {
               ::testing::HasSubstr("Expected output Tensor of DT_FLOAT"));
 }
 
-TEST_F(RegressorTest, MissingRegressionSignature) {
+TEST_P(RegressorTest, MissingRegressionSignature) {
   auto* signature_defs = meta_graph_def_->mutable_signature_def();
   SignatureDef sig_def;
-  (*signature_defs)["serving_default"] = sig_def;
+  (*signature_defs)[kDefaultServingSignatureDefKey] = sig_def;
   TF_ASSERT_OK(Create());
   Feature feature;
   feature.mutable_bytes_list()->add_value("uno");
@@ -527,6 +543,36 @@ TEST_F(RegressorTest, MissingRegressionSignature) {
   ASSERT_FALSE(status.ok());
   EXPECT_EQ(::tensorflow::error::INVALID_ARGUMENT, status.code()) << status;
 }
+
+TEST_P(RegressorTest, MethodNameCheck) {
+  RegressionResponse response;
+  *request_.mutable_input()->mutable_example_list()->mutable_examples()->Add() =
+      example_with_output(2.0);
+  auto* signature_defs = meta_graph_def_->mutable_signature_def();
+
+  // Legit method name. Should always work.
+  (*signature_defs)[kDefaultServingSignatureDefKey].set_method_name(
+      kRegressMethodName);
+  TF_EXPECT_OK(RunRegress(GetRunOptions(), *meta_graph_def_, {}, fake_session_,
+                          request_, &response));
+
+  // Unsupported method name will fail when method check is enabled.
+  (*signature_defs)[kDefaultServingSignatureDefKey].set_method_name(
+      "not/supported/method");
+  EXPECT_EQ(RunRegress(GetRunOptions(), *meta_graph_def_, {}, fake_session_,
+                       request_, &response)
+                .ok(),
+            !IsMethodNameCheckEnabled());
+
+  // Empty method name will fail when method check is enabled.
+  (*signature_defs)[kDefaultServingSignatureDefKey].clear_method_name();
+  EXPECT_EQ(RunRegress(GetRunOptions(), *meta_graph_def_, {}, fake_session_,
+                       request_, &response)
+                .ok(),
+            !IsMethodNameCheckEnabled());
+}
+
+INSTANTIATE_TEST_SUITE_P(Regressor, RegressorTest, ::testing::Bool());
 
 }  // namespace
 }  // namespace serving

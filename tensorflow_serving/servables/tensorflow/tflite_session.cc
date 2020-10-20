@@ -21,8 +21,11 @@ limitations under the License.
 #include "tensorflow/cc/saved_model/signature_constants.h"
 #include "tensorflow/core/framework/tensor_shape.pb.h"
 #include "tensorflow/core/lib/core/errors.h"
+#include "tensorflow/lite/kernels/hashtable/hashtable_ops.h"
 #include "tensorflow/lite/kernels/register.h"
 #include "tensorflow/lite/string_util.h"
+#include "tensorflow/lite/tools/signature/signature_def_util.h"
+#include "tensorflow/lite/util.h"
 
 namespace tensorflow {
 namespace serving {
@@ -70,10 +73,11 @@ Status TfLiteTypeToTfType(TfLiteType tflite_type, DataType* type) {
   return Status::OK();
 }
 
-std::string TfLiteToTensorName(const string& name) {
-  // TF variable names have ':0' suffix, TF Lite variables dont.
+std::string CanonicalTfLiteTensorName(const string& tf_name) {
+  // TF variable names have ':0' suffix, early versions of the TF Lite converter
+  // used to strip this suffix. Enforce this behavior for compatibility.
   std::pair<absl::string_view, absl::string_view> name_index =
-      absl::StrSplit(name, absl::MaxSplits(':', 1));
+      absl::StrSplit(tf_name, absl::MaxSplits(':', 1));
   return std::string(name_index.first);
 }
 
@@ -221,6 +225,8 @@ Status TfLiteSession::Create(string&& buffer,
 
   // TODO(b/140959776): Add support for non-builtin ops (flex or custom ops).
   tflite::ops::builtin::BuiltinOpResolver resolver;
+  // TODO(b/165643512): Remove adding Hashtable to resolver by default.
+  tflite::ops::custom::AddHashtableOps(&resolver);
   std::unique_ptr<tflite::Interpreter> interpreter;
   if (tflite::InterpreterBuilder(*model, resolver)(&interpreter) != kTfLiteOk) {
     return errors::Internal("Cannot build Interpreter from buffer.");
@@ -234,22 +240,59 @@ Status TfLiteSession::Create(string&& buffer,
   TensorInfoMap outputs;
   TF_RETURN_IF_ERROR(GetTensorInfoMap(*interpreter, false, &outputs));
 
+  // Map of TFLite tensor name -> tensor index
   std::map<string, int> input_tensor_to_index;
   std::map<string, int> output_tensor_to_index;
-
-  // Build a default SignatureDef map.
-  // TODO(b/140959776): Add support to read this map from tflite model.
-  signatures->clear();
-  SignatureDef* sigdef = &(*signatures)[kDefaultServingSignatureDefKey];
   for (const auto& info : inputs) {
-    (*sigdef->mutable_inputs())[info.first] = info.second.first;
-    input_tensor_to_index[info.first] = info.second.second;
+    const string& tflite_tensor_name = CanonicalTfLiteTensorName(info.first);
+    input_tensor_to_index[tflite_tensor_name] = info.second.second;
   }
   for (const auto& info : outputs) {
-    (*sigdef->mutable_outputs())[info.first] = info.second.first;
-    output_tensor_to_index[info.first] = info.second.second;
+    const string& tflite_tensor_name = CanonicalTfLiteTensorName(info.first);
+    output_tensor_to_index[tflite_tensor_name] = info.second.second;
   }
-  sigdef->set_method_name(kPredictMethodName);
+
+  // Attempt to read signature defs from the model file
+  std::map<string, SignatureDef> signature_defs;
+  const auto status =
+      tflite::GetSignatureDefMap(model->GetModel(), &signature_defs);
+  if (status != Status::OK()) {
+    return errors::InvalidArgument(
+        "Invalid SignatureDefs found in TfLite model: ",
+        status.error_message());
+  }
+  const bool has_lite_signature_def = !signature_defs.empty();
+
+  signatures->clear();
+  if (has_lite_signature_def) {
+    // Ensure that canonical TFLite tensor names are used in signature defs
+    for (const auto& signature_item : signature_defs) {
+      SignatureDef* tflite_signature = &(*signatures)[signature_item.first];
+      tflite_signature->CopyFrom(signature_item.second);
+      for (auto& input : *tflite_signature->mutable_inputs()) {
+        TensorInfo* tensor_info = &input.second;
+        tensor_info->set_name(CanonicalTfLiteTensorName(tensor_info->name()));
+      }
+      for (auto& output : *tflite_signature->mutable_outputs()) {
+        TensorInfo* tensor_info = &output.second;
+        tensor_info->set_name(CanonicalTfLiteTensorName(tensor_info->name()));
+      }
+    }
+  } else {
+    // Build a mock signature from the input/output tensors of the model.
+    // TODO(b/169239308)
+    LOG(WARNING) << "No signature def found in TFLite model. Generating one.";
+    SignatureDef* sigdef = &(*signatures)[kDefaultServingSignatureDefKey];
+    for (const auto& info : inputs) {
+      string tflite_tensor_name = CanonicalTfLiteTensorName(info.first);
+      (*sigdef->mutable_inputs())[tflite_tensor_name] = info.second.first;
+    }
+    for (const auto& info : outputs) {
+      string tflite_tensor_name = CanonicalTfLiteTensorName(info.first);
+      (*sigdef->mutable_outputs())[tflite_tensor_name] = info.second.first;
+    }
+    sigdef->set_method_name(kPredictMethodName);
+  }
 
   tflite_session->reset(new TfLiteSession(
       std::move(input_tensor_to_index), std::move(output_tensor_to_index),
@@ -299,7 +342,7 @@ Status TfLiteSession::Run(
   // happen in-parallel.
   absl::MutexLock lock(&mutex_);
   for (const auto& input : inputs) {
-    const string& name = TfLiteToTensorName(input.first);
+    const string& name = CanonicalTfLiteTensorName(input.first);
     if (input_tensor_to_index_.find(name) == input_tensor_to_index_.end()) {
       return errors::InvalidArgument("Missing input TFLite tensor: ", name);
     }
@@ -314,7 +357,7 @@ Status TfLiteSession::Run(
 
   outputs->clear();
   for (const auto& tfname : output_tensor_names) {
-    const string& name = TfLiteToTensorName(tfname);
+    const string& name = CanonicalTfLiteTensorName(tfname);
     if (output_tensor_to_index_.find(name) == output_tensor_to_index_.end()) {
       return errors::InvalidArgument("Missing output TFLite tensor: ", name);
     }

@@ -49,6 +49,8 @@ limitations under the License.
 #include "tensorflow_serving/model_servers/platform_config_util.h"
 #include "tensorflow_serving/model_servers/server_core.h"
 #include "tensorflow_serving/servables/tensorflow/session_bundle_config.pb.h"
+#include "tensorflow_serving/servables/tensorflow/thread_pool_factory_config.pb.h"
+#include "tensorflow_serving/servables/tensorflow/util.h"
 
 namespace tensorflow {
 namespace serving {
@@ -135,7 +137,7 @@ BuildServerCredentialsFromSSLConfigFile(const string& ssl_config_file) {
 
   ssl_ops.force_client_auth = ssl_config.client_verify();
 
-  if (ssl_config.custom_ca().size() > 0) {
+  if (!ssl_config.custom_ca().empty()) {
     ssl_ops.pem_root_certs = ssl_config.custom_ca();
   }
 
@@ -189,6 +191,9 @@ Status Server::BuildAndStart(const Options& server_options) {
         "Both server_options.model_base_path and "
         "server_options.model_config_file are empty!");
   }
+
+  SetSignatureMethodNameCheckFeature(
+      server_options.enable_signature_method_name_check);
 
   // For ServerCore Options, we leave servable_state_monitor_creator unspecified
   // so the default servable_state_monitor_creator will be used.
@@ -266,7 +271,8 @@ Status Server::BuildAndStart(const Options& server_options) {
     }
     session_bundle_config.set_remove_unused_fields_from_bundle_metagraph(
         server_options.remove_unused_fields_from_bundle_metagraph);
-    session_bundle_config.set_use_tflite_model(server_options.use_tflite_model);
+    session_bundle_config.set_prefer_tflite_model(
+        server_options.prefer_tflite_model);
     options.platform_config_map =
         CreateTensorFlowPlatformConfigMap(session_bundle_config);
   } else {
@@ -315,10 +321,20 @@ Status Server::BuildAndStart(const Options& server_options) {
   predict_server_options.server_core = server_core_.get();
   predict_server_options.enforce_session_run_timeout =
       server_options.enforce_session_run_timeout;
+  if (!server_options.thread_pool_factory_config_file.empty()) {
+    ThreadPoolFactoryConfig thread_pool_factory_config;
+    TF_RETURN_IF_ERROR(ParseProtoTextFile<ThreadPoolFactoryConfig>(
+        server_options.thread_pool_factory_config_file,
+        &thread_pool_factory_config));
+    TF_RETURN_IF_ERROR(ThreadPoolFactoryRegistry::CreateFromAny(
+        thread_pool_factory_config.thread_pool_factory_config(),
+        &thread_pool_factory_));
+  }
+  predict_server_options.thread_pool_factory = thread_pool_factory_.get();
   prediction_service_ =
       absl::make_unique<PredictionServiceImpl>(predict_server_options);
 
-  profiler_service_ = tensorflow::CreateProfilerService();
+  profiler_service_ = tensorflow::profiler::CreateProfilerService();
 
   ::grpc::ServerBuilder builder;
   builder.AddListeningPort(
@@ -337,7 +353,7 @@ Status Server::BuildAndStart(const Options& server_options) {
   builder.SetMaxMessageSize(tensorflow::kint32max);
   const std::vector<GrpcChannelArgument> channel_arguments =
       parseGrpcChannelArgs(server_options.grpc_channel_arguments);
-  for (GrpcChannelArgument channel_argument : channel_arguments) {
+  for (const GrpcChannelArgument& channel_argument : channel_arguments) {
     // gRPC accept arguments of two types, int and string. We will attempt to
     // parse each arg as int and pass it on as such if successful. Otherwise we
     // will pass it as a string. gRPC will log arguments that were not accepted.

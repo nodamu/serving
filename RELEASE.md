@@ -1,3 +1,92 @@
+# Release 2.3.0
+
+## Bug Fixes and Other Changes
+
+* Add a ThreadPoolFactory abstraction for returning inter- and intra- thread pools, and update PredictRequest handling logic to use the new abstraction. (commit: 8e3a00cd8ef00523227cbe1f694ab56454a880c3)
+* Update Dockerfile.devel* with py3.6 installed. (commit: b3f46d44d07480266b28776caa13211339777bc5)
+* Add more metrics for batching. (commit: f0bd9cf8b85710b638938361d356dbf15fda2e86)
+* Rename method to clarify intent. (commit: 9feac12f2223124c7ecc85a687e1ee2b24e3f7ad)
+* Plug ThreadPoolFactory into Classify request handling logic. (commit: 975f474a4ea9ef134439e266ec4a471741253ecf)
+* Plug ThreadPoolFactory into Regress request handling logic. (commit: ff9ebf2db8bf7cbc7bb199bbb207409eae25d5cc)
+* Plug ThreadPoolFactory into MultiInference request handling logic. (commit: 9a2db1da9b7e992d29ad4ccfcb125734d0cd760e)
+* Add a tflite benchmark for Mobilenet v1 quant (commit: e26682237cf756eca2dc12c83e8d5d24f00c1261)
+* Allow batch size of zero in row format JSON (commit: fee9d12070a76c1cf56bc8ae40f306a09dfd07b1)
+* Add tests for zero-sized batch (commit: b064c1d3df03b0401c5ca61de0d5ab36cd5645a5)
+* Support for MLMD(https://www.tensorflow.org/tfx/guide/mlmd) broadcast in TensorFlow serving. (commit: 4f8d3b789964d173f2d0bd87a42abfbd6a2b1e71)
+* Fix docker based builds (fixes #1596) (commit: ca2e0032d1ead843398d7744e8c51ead28daf63c)
+* Fix order dependency in batching_session_test. (commit: 58540f746c65516dc3fcda7751c6983050307409)
+* Split BasicTest in machine_learning_metadata_test into multiple test methods without order dependency. (commit: 745c735e315941925e324cbebe78a1f09d5a7443)
+* Revert pinning the version for "com_google_absl". (commit: ff9e950fa692c6f9387239bb9fa877975e8cf1c1)
+* Minimize the diffs between mkl and non-mkl Dockerfiles (commit: e7830148e53acfec7d3af7dd512a7e825f75da2a)
+* Pin "com_google_absl" at the same version(with same patch) with Tensorflow. (commit: f46b88af8af94be3c6497cc6c50a4e5c0625b2d5)
+* Update TF Text to v2.2.0. (commit: f8ea95d906421ff9517b0027662546741c486edf)
+* fix broken web link (commit: 0cb123f18df4032d8f22c1b2e19b4f41bd6c3da3)
+* Test zero-sized batch with tensors of different shapes (commit: 1f7aebd906a70ba0fa04105ceee6227960b764f7)
+* Test inconsistent batch size between zero and non-zero (commit: 91afd42dab8ce50f86bbf65065dce0c28163314b)
+* Fix broken GetModelMetadata request processing (#1612) (commit: c1ce0752f1076bd6f92e1af5f73e3a3c552f4691)
+* Adds support for SignatureDefs stored in metadata buffers to tflite sessions (commit: 4867fedbff8a33f499972268abe96618abcb81aa)
+* Update ICU library to include knowledge of built-in data files. (commit: c32ebd5e9f09828c80413ca989b99e8544502c1a)
+* Add support for version labels to REST API (Fixes #1555). (commit: 3df036223b66738de1b873e9b163230fb7661cb4)
+* Update TF Text regression model to catch errors thrown from within ops. (commit: 425d596b9b0aef2bf3ea675c985f01e55f880a4e)
+* Upgrade to CUDA Version 10.1. (commit: fd5a2a2508daf21ad174b4ec7b62501486137c01)
+* Migrates profiler_client trace to the new api in tensorflow_model_server_test. (commit: 8d7d1d6bbc50756e73aed4b9eb5a2c8ff25cdc79)
+* Update the testing model for TRT to fix the test. (commit: 28f812d8ce8f256e2d9256d6a98cd8f75f747842)
+* Add release notes for TF Serving 2.2.0 (commit: 54475e6508889c13992aced1da12a372d997e4e3)
+* Update bazel version requirement and version used in the docker images to match with TF (3.0.0). (commit: 56854d3fa27cce8c1f7816214f59e6e82c4bf5fc)
+* Fixes instructions on sample commands to serve a model with docker. (commit: a5cd1caafacd7480f5d8d2dd164adce3410b024f)
+* Change use_tflite_model to prefer_tflite_model to allow multi-tenancy of Tensorflow models with Tensorflow Lite models. (commit: 8589d8177bd300625b4c7596240150f8a8002d19)
+* Introducing Arena usage to TensorFlow Serving's HTTP handlers. (commit: a33978ca4c29387845e9b51d5653b997d4b3f814)
+* Fix tensorflow::errors:* calls, which use StrCat instead of StrFormat (commit: 2c0bcec68c040306e009b5a10d4bc80bc58fe0c5)
+* Instrumentation for BatchingSession: (commit: 3ca9e89d1b6147706981467a84c6421c44d3794a)
+* adjust error message for incorrect keys of instances object (commit: 83863b8fec26a8ea2d3957366173f9a52658b469)
+* Update rules_pkg to latest (0.2.5) release. (commit: 932358ec7511e54ad9c93ea606cc677da2d1fcb2)
+* In batching session, implement the support for 'enable_large_batch_splitting'. (commit: d7c6a65b816849cf2b84015a5b2972be7950dc89)
+* Update version for 2.3.0-rc0 release. (commit: 3af330317628a713a6e318097c7cd6fa8571165d)
+* Set cuda compute capabilities for `cuda` build config. (commit: 731a34f0b3f43a6f7a8da85655d3a4a5c72d066a)
+* Update version for 2.3.0 release. (commit: 8b4c7095b9931442a77288624fdd1a207671eb4c)
+
+## Thanks to our Contributors
+
+This release contains contributions from many people at Google.
+
+
+# Release 2.2.0
+
+## Major Features and Improvements
+
+* Upgrade to CUDA Version 10.1. (commit: 3ab70a7811f63b994da076e2688ccc66feccee96)
+* Update TF Text to v2.2.0. (commit: fd9842816eddb4782579eadd119156190d6d2fec)
+
+## Breaking Changes
+
+## Bug Fixes and Other Changes
+
+* This release is based on TensorFlow version 2.2.0
+* Add a SourceAdapter that adds a prefix to StoragePath. (commit: f337623da81521eefd8cdc2da1c4a450ecf1d028)
+* Switch users of `tensorflow::Env::Now*()` to `EnvTime::Now*()`. (commit: 8a0895eb8127941b2e9dada20718dd28f3dbaee1)
+* Remove SessionBundle support from Predictor. (commit: 2090d67f4e5e8ee5aa7faf8437bea096a438450a)
+* Replace the error_codes.proto references in tf serving. (commit: ab475bf6c5e5e4b3b42ffa2aecf18b39fd481ad3)
+* Adds [performance guide and documentation](tensorflow_serving/g3doc/tensorboard.md) for TensorBoard integration (commit: f1e4eb2259da90bb9c5fe028ba824ac18a436f67)
+* Remove SessionBundleSourceAdapter as we load Session bundles via (commit: d50aa2b0b986b11368ddcf6b6eb20b9381af474c)
+* Use SavedModelBundleSourceAdapterConfig instead of (commit: 8ed3ceea985529a350290cf782cb34c3c66827d4)
+* Update minimum bazel version to 1.2.1. (commit: 1a36026198df5f7dec1e626ef9b112fecdd2916b)
+* Drop support for beta gRPC APIs. (commit: 13d01fc64330ff883bd1553122d9fd114a5a7368)
+* API spec for httpserver response-streaming (with flow-control). (commit: fd597f074ce127056515bc52ee3a3d4ff4b727bb)
+* Change Python version to PY3. (commit: 7516746a311f96b57a60598feba40cbdd3989e73)
+* Update Python tests in PY3. (commit: 0cf65d2105c191c00fba8918ba75fc955bbeace3)
+* Upgrade bazel version for Dockerfiles. (commit: e507aa193b9f3520d40e3da5e4d2263280ff35e4)
+* Change dockerfile for PY3. (commit: 7cbd06e8b7720b82b1d2dfae54c3a828d3a52eb4)
+* Reduce contention in FastReadDynamicPtr by sharding the ReadPtrs, by default one per CPU. (commit: d3b374bc70348f2e5e22b7e9ebb191ee9d5b3268)
+* Ensure that all outstanding ReadPtrs are destroyed before allowing a (commit: e41ee40826652b6aa5a3f071107074923d6ff6c7)
+* Allow splitting fields from batched session metadata into individual sessions (commit: caf2a92ba07ca4d10515f0b018c920e9b325c6c8)
+* Allow passing ThreadPoolOptions in various Session implementations. (commit: 2b6212cf0aa88b719ee00267f83c89d4f7599ef1)
+* Update bazel version used in the docker images. (commit: 162f72949c6ecbe9e610182c923dec0aa5924cf2)
+* Format error strings correctly in JSON response (Fixes #1600). (commit: 1ff4d31cd9a0a736162813c149139cce0ccaaa2c)
+* Fix broken GetModelMetadata request processing (#1612) (commit: 55c40374b548b89e8de6d899ef2b0b355c0fa9e5)
+* Support Python 3.7 in tensorflow-serving-api package (Fixes #1640) (commit: f775bb25e80a6c7b3c66842eb9085d44d9752ec2)
+* Update ICU library to include knowledge of built-in data files. (commit: 774f2489384cf985c534298d1303474c268efe5c)
+* Adds storage.googleapis.com as the primary download location for the ICU, and resets the sha256 to match this archive. (commit: 028d05095c4e302c06096e5ea32917718828ea47)
+
 # Release 2.1.0
 
 ## Major Features and Improvements

@@ -11,16 +11,16 @@ load("//tensorflow_serving:repo.bzl", "tensorflow_http_archive")
 
 tensorflow_http_archive(
     name = "org_tensorflow",
-    sha256 = "d41bba0a8bfa5ba1128b3e81b8850512697bc9069406bd1ffaa6fb1075f2d0cc",
-    git_commit = "f7132de3d4ded1bf7d246e6d4c6308a4c08689b8",
+    sha256 = "2ff26df2b4e79a1e67ae5b8137af8192c03f3b8d4934bf9e0bb7945f213601c0",
+    git_commit = "24ee71b4032adf4fda507f69016426b66c3425d7",
 )
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "rules_pkg",
-    sha256 = "5bdc04987af79bd27bc5b00fe30f59a858f77ffa0bd2d8143d5b31ad8b1bd71c",
-    url = "https://github.com/bazelbuild/rules_pkg/releases/download/0.2.0/rules_pkg-0.2.0.tar.gz",
+    sha256 = "352c090cc3d3f9a6b4e676cf42a6047c16824959b438895a76c2989c6d7c246a",
+    url = "https://github.com/bazelbuild/rules_pkg/releases/download/0.2.5/rules_pkg-0.2.5.tar.gz",
 )
 
 load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
@@ -72,7 +72,7 @@ tf_serving_workspace()
 # Specify the minimum required bazel version.
 load("@org_tensorflow//tensorflow:version_check.bzl", "check_bazel_version_at_least")
 
-check_bazel_version_at_least("2.0.0")
+check_bazel_version_at_least("3.0.0")
 
 # GPRC deps, required to match TF's.  Only after calling tf_serving_workspace()
 load("@com_github_grpc_grpc//bazel:grpc_deps.bzl", "grpc_deps")
